@@ -74,3 +74,7 @@ def generate_transaction():
     transaction = Transaction(sender_address, sender_private_key, recipient_address, value)
     response = {'transaction': transaction.to_dict(), 'signature': transaction.sign_transaction()}
     return jsonify(response), 200
+
+
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=5000)
