@@ -6,6 +6,13 @@ from flask import Flask, jsonify, request
 import requests
 from urllib.parse import urlparse
 
+from collections import OrderedDict
+import binascii
+import Crypto
+import Crypto.Random
+from Crypto.Hash import SHA
+from Crypto.PublicKey import RSA
+from Crypto.Signature import PKCS1_v1_5
 
 class Blockchain(object):
     def __init__(self):
@@ -108,6 +115,16 @@ class Blockchain(object):
 
         parsed_url = urlparse(address)
         self.nodes.add(parsed_url.netloc)
+
+    def verify_transaction_signature(self, sender_address, signature, transaction):
+        """
+        Check that the provided signature corresponds to transaction
+        signed by the public key (sender_address)
+        """
+        public_key = RSA.importKey(binascii.unhexlify(sender_address))
+        verifier = PKCS1_v1_5.new(public_key)
+        h = SHA.new(str(transaction).encode('utf8'))
+        return verifier.verify(h, binascii.unhexlify(signature))
 
     def valid_chain(self, chain):
         """
