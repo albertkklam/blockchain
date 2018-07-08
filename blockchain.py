@@ -2,26 +2,83 @@ import hashlib
 import json
 from time import time
 from uuid import uuid4
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
+from flask_cors import CORS
+
 import requests
 from urllib.parse import urlparse
 
 from collections import OrderedDict
 import binascii
+
 import Crypto
 import Crypto.Random
 from Crypto.Hash import SHA
 from Crypto.PublicKey import RSA
 from Crypto.Signature import PKCS1_v1_5
 
+
+
+MINING_SENDER = "THE BLOCKCHAIN"
+MINING_REWARD = 1
+MINING_DIFFICULTY = 4
+
+
 class Blockchain(object):
     def __init__(self):
         self.chain = []
         self.current_transactions = []
         self.nodes = set()
+        self.node_id = str(uuid4()).replace('-', '')
 
         # Create the genesis block
         self.new_block(proof=100, previous_hash=1)
+
+    def register_node(self, node_url):
+        """
+        Add a new node to the list of nodes
+        """
+        # Checking node_url has valid format
+        parsed_url = urlparse(node_url)
+        if parsed_url.netloc:
+            self.nodes.add(parsed_url.netloc)
+        elif parsed_url.path:
+            # Accepts an URL without scheme like '192.168.0.5:5000'.
+            self.nodes.add(parsed_url.path)
+        else:
+            raise ValueError('Invalid URL')
+
+    @staticmethod
+    def verify_transaction_signature(sender_address, signature, transaction):
+        """
+        Check that the provided signature corresponds to transaction
+        signed by the public key (sender_address)
+        """
+        public_key = RSA.importKey(binascii.unhexlify(sender_address))
+        verifier = PKCS1_v1_5.new(public_key)
+        h = SHA.new(str(transaction).encode('utf8'))
+        return verifier.verify(h, binascii.unhexlify(signature))
+
+    def submit_transaction(self, sender_address, recipient_address, value, signature):
+        """
+        Add a transaction to transactions array if the signature verified
+        """
+        transaction = OrderedDict({'sender_address': sender_address,
+                                   'recipient_address': recipient_address,
+                                   'value': value})
+
+        # Reward for mining a block
+        if sender_address == MINING_SENDER:
+            self.current_transactions.append(transaction)
+            return len(self.chain) + 1
+        # Manages transactions from wallet to another wallet
+        else:
+            transaction_verification = self.verify_transaction_signature(sender_address, signature, transaction)
+            if transaction_verification:
+                self.current_transactions.append(transaction)
+                return len(self.chain) + 1
+            else:
+                return False
 
     def new_block(self, proof, previous_hash=None):
         """
@@ -42,23 +99,6 @@ class Blockchain(object):
         self.current_transactions = []
         self.chain.append(block)
         return block
-
-    def new_transaction(self, sender, recipient, amount):
-        """
-        Creates a new transaction to go into the next mined Block
-        :param sender: <str> Address of the Sender
-        :param recipient: <str> Address of the Recipient
-        :param amount: <int> Amount
-        :return: <int> The index of the Block that will hold this transaction
-        """
-
-        self.current_transactions.append({
-            'sender': sender,
-            'recipient': recipient,
-            'amount': amount,
-        })
-
-        return self.last_block['index'] + 1
 
     @staticmethod
     def hash(block):
@@ -93,38 +133,19 @@ class Blockchain(object):
         return proof
 
     @staticmethod
-    def valid_proof(last_proof, proof, last_hash):
+    def valid_proof(last_proof, proof, last_hash, difficulty=MINING_DIFFICULTY):
         """
         Validates the Proof: Does hash(last_proof, proof) contain 4 leading zeroes?
         :param last_proof: <int> Previous Proof
         :param proof: <int> Current Proof
         :param last_hash: <str> The hash of the previous block
+        :param difficulty: <int> The difficulty of the proof
         :return: <bool> True if correct, False if not.
         """
 
         guess = f'{last_proof}{proof}{last_hash}'.encode()
         guess_hash = hashlib.sha256(guess).hexdigest()
-        return guess_hash[:4] == "0000"
-
-    def register_node(self, address):
-        """
-        Add a new node to the list of nodes
-        :param address: <str> Address of node. Eg. 'http://192.168.0.5:5000'
-        :return: None
-        """
-
-        parsed_url = urlparse(address)
-        self.nodes.add(parsed_url.netloc)
-
-    def verify_transaction_signature(self, sender_address, signature, transaction):
-        """
-        Check that the provided signature corresponds to transaction
-        signed by the public key (sender_address)
-        """
-        public_key = RSA.importKey(binascii.unhexlify(sender_address))
-        verifier = PKCS1_v1_5.new(public_key)
-        h = SHA.new(str(transaction).encode('utf8'))
-        return verifier.verify(h, binascii.unhexlify(signature))
+        return guess_hash[:difficulty] == "0" * difficulty
 
     def valid_chain(self, chain):
         """
@@ -190,12 +211,20 @@ class Blockchain(object):
 
 # Instantiate our Node
 app = Flask(__name__)
-
-# Generate a globally unique address for this node
-node_identifier = str(uuid4()).replace('-', '')
+CORS(app)
 
 # Instantiate the Blockchain
 blockchain = Blockchain()
+
+
+@app.route('/')
+def index():
+    return render_template('./index.html')
+
+
+@app.route('/configure')
+def configure():
+    return render_template('./configure.html')
 
 
 @app.route('/mine', methods=['GET'])
@@ -207,10 +236,11 @@ def mine():
 
     # We must receive a reward for finding the proof.
     # The sender is "0" to signify that this node has mined a new coin.
-    blockchain.new_transaction(
-        sender="0",
-        recipient=node_identifier,
-        amount=1,
+    blockchain.submit_transaction(
+        sender_address=MINING_SENDER,
+        recipient_address=blockchain.node_id,
+        value=MINING_REWARD,
+        signature=""
     )
 
     # Forge the new Block by adding it to the chain
@@ -229,18 +259,26 @@ def mine():
 
 @app.route('/transactions/new', methods=['POST'])
 def new_transaction():
-    values = request.get_json()
+    values = request.form
 
     # Check that the required fields are in the POST'ed data
-    required = ['sender', 'recipient', 'amount']
+    required = ['sender_address', 'recipient_address', 'amount', 'signature']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
-    # Create a new Transaction
-    index = blockchain.new_transaction(values['sender'], values['recipient'], values['amount'])
-
-    response = {'message': f'Transaction will be added to Block {index}'}
-    return jsonify(response), 201
+    transaction_result = blockchain.submit_transaction(
+        values['sender_address'],
+        values['recipient_address'],
+        values['amount'],
+        values['signature']
+    )
+    
+    if transaction_result is False:
+        response = {'message': 'Invalid Transaction!'}
+        return jsonify(response), 406
+    else:
+        response = {'message': 'Transaction will be added to Block ' + str(transaction_result)}
+        return jsonify(response), 201
 
 
 @app.route('/chain', methods=['GET'])
