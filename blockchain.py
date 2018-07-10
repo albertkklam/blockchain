@@ -18,7 +18,6 @@ from Crypto.PublicKey import RSA
 from Crypto.Signature import PKCS1_v1_5
 
 
-
 MINING_SENDER = "THE BLOCKCHAIN"
 MINING_REWARD = 1
 MINING_DIFFICULTY = 4
@@ -227,6 +226,48 @@ def configure():
     return render_template('./configure.html')
 
 
+@app.route('/transactions/new', methods=['POST'])
+def new_transaction():
+    values = request.form
+
+    # Check that the required fields are in the POST'ed data
+    required = ['sender_address', 'recipient_address', 'amount', 'signature']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    transaction_result = blockchain.submit_transaction(
+        values['sender_address'],
+        values['recipient_address'],
+        values['amount'],
+        values['signature']
+    )
+
+    if transaction_result is False:
+        response = {'message': 'Invalid Transaction!'}
+        return jsonify(response), 406
+    else:
+        response = {'message': 'Transaction will be added to Block ' + str(transaction_result)}
+        return jsonify(response), 201
+
+
+@app.route('/transactions/get', methods=['GET'])
+def get_transactions():
+    # Get transactions from transactions pool
+    transactions = blockchain.current_transactions
+
+    response = {'transactions': transactions}
+    return jsonify(response), 200
+
+
+@app.route('/chain', methods=['GET'])
+def full_chain():
+    response = {
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+    }
+    return jsonify(response), 200
+
+
 @app.route('/mine', methods=['GET'])
 def mine():
     # We run the proof of work algorithm to get the next proof...
@@ -257,44 +298,12 @@ def mine():
     return jsonify(response), 200
 
 
-@app.route('/transactions/new', methods=['POST'])
-def new_transaction():
-    values = request.form
-
-    # Check that the required fields are in the POST'ed data
-    required = ['sender_address', 'recipient_address', 'amount', 'signature']
-    if not all(k in values for k in required):
-        return 'Missing values', 400
-
-    transaction_result = blockchain.submit_transaction(
-        values['sender_address'],
-        values['recipient_address'],
-        values['amount'],
-        values['signature']
-    )
-    
-    if transaction_result is False:
-        response = {'message': 'Invalid Transaction!'}
-        return jsonify(response), 406
-    else:
-        response = {'message': 'Transaction will be added to Block ' + str(transaction_result)}
-        return jsonify(response), 201
-
-
-@app.route('/chain', methods=['GET'])
-def full_chain():
-    response = {
-        'chain': blockchain.chain,
-        'length': len(blockchain.chain),
-    }
-    return jsonify(response), 200
-
-
 @app.route('/nodes/register', methods=['POST'])
 def register_nodes():
     values = request.get_json()
 
-    nodes = values.get('nodes')
+    nodes = values.get('nodes').replace(" ", "").split(',')
+
     if nodes is None:
         return "Error: Please supply a valid list of nodes", 400
 
@@ -323,6 +332,13 @@ def consensus():
             'chain': blockchain.chain
         }
 
+    return jsonify(response), 200
+
+
+@app.route('/nodes/get', methods=['GET'])
+def get_nodes():
+    nodes = list(blockchain.nodes)
+    response = {'nodes': nodes}
     return jsonify(response), 200
 
 
